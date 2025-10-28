@@ -1,0 +1,131 @@
+{
+  "info": {
+    "_postman_id": "countries-api-collection",
+    "name": "Countries API Testing Collection",
+    "description": "A prefilled Postman collection for testing the Countries API endpoints. Base URL: http://localhost:3000 (adjust as needed). Assumes the server is running and DB is initialized.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Refresh Countries Data",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/countries/refresh",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["countries", "refresh"]
+        },
+        "description": "Refreshes the countries data from external APIs, updates the database, and generates a summary image."
+      },
+      "response": []
+    },
+    {
+      "name": "Get All Countries",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/countries?region=Americas&currency=USD&sort=gdp_desc",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["countries"],
+          "query": [
+            {
+              "key": "region",
+              "value": "Americas"
+            },
+            {
+              "key": "currency",
+              "value": "USD"
+            },
+            {
+              "key": "sort",
+              "value": "gdp_desc"
+            }
+          ]
+        },
+        "description": "Retrieves all countries with optional filters for region, currency, and sorting by GDP descending."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Specific Country",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/countries/united states",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["countries", "united states"]
+        },
+        "description": "Retrieves details for a specific country by name (case-insensitive)."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete Country",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/countries/canada",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["countries", "canada"]
+        },
+        "description": "Deletes a country by name (case-insensitive). Returns 404 if not found."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/status",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["status"]
+        },
+        "description": "Gets the total number of countries and the last refresh timestamp."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Summary Image",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/countries/image",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["countries", "image"]
+        },
+        "description": "Serves the generated summary PNG image (top 5 countries by GDP, total count, last refresh)."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    }
+  ]
+}
