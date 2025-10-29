@@ -2,7 +2,9 @@ import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
 import pkg from "pg";
-import { createCanvas } from "canvas";
+import { createCanvas, loadImage } from "canvas";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 const { Pool } = pkg;
@@ -92,7 +94,7 @@ async function refreshCountries(req, res) {
           estimated_gdp =
             exchange_rate !== null
               ? (population * randomMultiplier()) / exchange_rate
-              : null;
+              : 0; // always numeric to avoid null issues
         }
 
         await client.query(
@@ -230,7 +232,7 @@ app.get("/status", async (req, res) => {
 app.get("/countries/image", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM countries ORDER BY estimated_gdp DESC NULLS LAST LIMIT 5"
+      "SELECT * FROM countries ORDER BY estimated_gdp DESC LIMIT 5"
     );
 
     if (!rows || rows.length === 0) {
@@ -258,7 +260,7 @@ app.get("/countries/image", async (req, res) => {
     let y = 230;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "N/A";
+      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "0";
       ctx.fillText(`${i + 1}. ${r.name || "Unknown"} - ${gdp}`, 50, y);
       y += 60;
     }
