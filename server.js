@@ -49,7 +49,6 @@ async function refreshCountries(req, res) {
   try {
     console.log("🌍 Refreshing countries and exchange rates...");
 
-    // Fetch external APIs
     const [countriesRes, ratesRes] = await Promise.allSettled([
       axios.get(
         "https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies"
