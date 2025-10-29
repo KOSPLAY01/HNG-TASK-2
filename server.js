@@ -39,8 +39,12 @@ const initDB = async () => {
       last_refreshed_at TIMESTAMP DEFAULT NOW()
     );
   `);
+
+  // Ensure cache folder exists
+  const cacheDir = path.join(process.cwd(), "cache");
+  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 };
-initDB();
+await initDB();
 
 // =============== HELPERS ===============
 const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000;
@@ -75,7 +79,6 @@ async function refreshCountries(req, res) {
     const countries = countriesRes.value.data;
     const rates = ratesRes.value.data.rates || {};
 
-    // Start DB transaction
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -129,7 +132,6 @@ async function refreshCountries(req, res) {
         );
       }
 
-      // Update meta table
       await client.query(`
         INSERT INTO meta (id, last_refreshed_at)
         VALUES (1, NOW())
@@ -145,7 +147,6 @@ async function refreshCountries(req, res) {
       client.release();
     }
 
-    // Generate image after DB commit
     await generateSummaryImage();
 
     console.log("✅ Refresh complete!");
@@ -161,9 +162,7 @@ async function refreshCountries(req, res) {
 
 // =============== REFRESH ROUTE ===============
 app.post("/countries/refresh", refreshCountries);
-
-// Optional GET alias for testing
-app.get("/countries/refresh", refreshCountries);
+app.get("/countries/refresh", refreshCountries); // optional testing
 
 // =============== GET ALL COUNTRIES ===============
 app.get("/countries", async (req, res) => {
@@ -275,38 +274,27 @@ async function generateSummaryImage() {
   ctx.fillText("Top 5 Countries by GDP:", 50, 180);
   ctx.font = "20px Arial";
 
-  // Draw each top 5 country with flag
   let y = 230;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    try {
-      if (r.flag_url) {
-        const flagRes = await axios.get(r.flag_url, { responseType: "arraybuffer" });
-        const flag = await loadImage(Buffer.from(flagRes.data));
-        const flagWidth = 60;
-        const flagHeight = 40;
-        const flagX = 60;
-        const flagY = y - 30;
-        ctx.drawImage(flag, flagX, flagY, flagWidth, flagHeight);
-      }
-      ctx.fillStyle = "white";
-      ctx.fillText(
-        `${i + 1}. ${r.name} - ${Math.round(r.estimated_gdp).toLocaleString()}`,
-        140,
-        y
-      );
-      y += 60;
-    } catch (err) {
-      console.warn(`⚠️ Could not load flag for ${r.name}:`, err.message);
-    }
+    ctx.fillStyle = "white";
+    ctx.fillText(
+      `${i + 1}. ${r.name} - ${Math.round(r.estimated_gdp).toLocaleString()}`,
+      50,
+      y
+    );
+    y += 60;
   }
 
-  // Save image
+  // Save image and await finish
   const cacheDir = path.join(process.cwd(), "cache");
-  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir);
-  const out = fs.createWriteStream(path.join(cacheDir, "summary.png"));
-  const stream = canvas.createPNGStream();
-  stream.pipe(out);
+  await new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(path.join(cacheDir, "summary.png"));
+    const stream = canvas.createPNGStream();
+    stream.pipe(out);
+    out.on("finish", resolve);
+    out.on("error", reject);
+  });
 }
 
 // =============== SERVER START ===============
