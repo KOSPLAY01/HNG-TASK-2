@@ -86,16 +86,14 @@ async function refreshCountries(req, res) {
 
         const currency_code = c.currencies?.[0]?.code || null;
         let exchange_rate = null;
-        let estimated_gdp = null;
+        let estimated_gdp = 0;
 
         if (currency_code) {
           exchange_rate = rates[currency_code] || null;
           estimated_gdp =
             exchange_rate !== null
               ? (population * randomMultiplier()) / exchange_rate
-              : 0;
-        } else {
-          estimated_gdp = 0;
+              : null;
         }
 
         await client.query(
@@ -153,7 +151,9 @@ async function refreshCountries(req, res) {
 }
 
 // =============== ROUTES ===============
+// Allow both POST and GET for /countries/refresh
 app.post("/countries/refresh", refreshCountries);
+app.get("/countries/refresh", refreshCountries);
 
 // Get all countries with optional filters
 app.get("/countries", async (req, res) => {
@@ -232,6 +232,9 @@ app.get("/countries/image", async (req, res) => {
   const { rows } = await pool.query(
     "SELECT * FROM countries ORDER BY estimated_gdp DESC LIMIT 5"
   );
+  if (!rows || rows.length === 0) {
+    return res.status(404).json({ error: "Summary image not found" });
+  }
   const total = await pool.query("SELECT COUNT(*) FROM countries");
   const meta = await pool.query("SELECT last_refreshed_at FROM meta LIMIT 1");
   const lastRef = meta.rows[0]?.last_refreshed_at || new Date();
