@@ -2,16 +2,14 @@ import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
 import pkg from "pg";
-import { createCanvas, loadImage } from "canvas";
-import fs from "fs";
-import path from "path";
+import { createCanvas } from "canvas";
 
 dotenv.config();
 const { Pool } = pkg;
 const app = express();
 app.use(express.json());
 
-// =============== DATABASE SETUP ===============
+// ================= DATABASE SETUP =================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -42,11 +40,11 @@ const initDB = async () => {
 };
 await initDB();
 
-// =============== HELPERS ===============
+// ================= HELPERS =================
 const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000;
 const getTimestamp = () => new Date().toISOString();
 
-// =============== REFRESH FUNCTION ===============
+// ================= REFRESH FUNCTION =================
 async function refreshCountries(req, res) {
   try {
     console.log("🌍 Refreshing countries and exchange rates...");
@@ -94,7 +92,7 @@ async function refreshCountries(req, res) {
           estimated_gdp =
             exchange_rate !== null
               ? (population * randomMultiplier()) / exchange_rate
-              : 0; // always numeric to avoid null issues
+              : null;
         }
 
         await client.query(
@@ -151,8 +149,8 @@ async function refreshCountries(req, res) {
   }
 }
 
-// =============== ROUTES ===============
-// Allow both POST and GET for /countries/refresh
+// ================= ROUTES =================
+// Refresh
 app.post("/countries/refresh", refreshCountries);
 app.get("/countries/refresh", refreshCountries);
 
@@ -214,7 +212,7 @@ app.delete("/countries/:name", async (req, res) => {
   }
 });
 
-// Status endpoint
+// Status
 app.get("/status", async (req, res) => {
   try {
     const total = await pool.query("SELECT COUNT(*) FROM countries");
@@ -228,11 +226,11 @@ app.get("/status", async (req, res) => {
   }
 });
 
-// Generate and serve image in memory
+// Generate and serve summary image IN MEMORY
 app.get("/countries/image", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT * FROM countries ORDER BY estimated_gdp DESC LIMIT 5"
+      "SELECT * FROM countries ORDER BY estimated_gdp DESC NULLS LAST LIMIT 5"
     );
 
     if (!rows || rows.length === 0) {
@@ -260,7 +258,7 @@ app.get("/countries/image", async (req, res) => {
     let y = 230;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "0";
+      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "N/A";
       ctx.fillText(`${i + 1}. ${r.name || "Unknown"} - ${gdp}`, 50, y);
       y += 60;
     }
@@ -273,6 +271,6 @@ app.get("/countries/image", async (req, res) => {
   }
 });
 
-// =============== SERVER START ===============
+// ================= SERVER START =================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
