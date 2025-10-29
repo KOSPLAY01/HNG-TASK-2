@@ -229,43 +229,47 @@ app.get("/status", async (req, res) => {
 
 // Generate and serve image in memory
 app.get("/countries/image", async (req, res) => {
-  const { rows } = await pool.query(
-    "SELECT * FROM countries ORDER BY estimated_gdp DESC LIMIT 5"
-  );
-  if (!rows || rows.length === 0) {
-    return res.status(404).json({ error: "Summary image not found" });
-  }
-  const total = await pool.query("SELECT COUNT(*) FROM countries");
-  const meta = await pool.query("SELECT last_refreshed_at FROM meta LIMIT 1");
-  const lastRef = meta.rows[0]?.last_refreshed_at || new Date();
-
-  const canvas = createCanvas(900, 600);
-  const ctx = canvas.getContext("2d");
-
-  ctx.fillStyle = "#1e1e1e";
-  ctx.fillRect(0, 0, 900, 600);
-
-  ctx.fillStyle = "white";
-  ctx.font = "26px Arial";
-  ctx.fillText(`Total Countries: ${total.rows[0].count}`, 50, 80);
-  ctx.fillText(`Last Refreshed: ${lastRef.toISOString()}`, 50, 120);
-
-  ctx.fillText("Top 5 Countries by GDP:", 50, 180);
-  ctx.font = "20px Arial";
-
-  let y = 230;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    ctx.fillText(
-      `${i + 1}. ${r.name} - ${Math.round(r.estimated_gdp).toLocaleString()}`,
-      50,
-      y
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM countries ORDER BY estimated_gdp DESC NULLS LAST LIMIT 5"
     );
-    y += 60;
-  }
 
-  res.setHeader("Content-Type", "image/png");
-  canvas.createPNGStream().pipe(res);
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: "Summary image not found" });
+    }
+
+    const total = await pool.query("SELECT COUNT(*) FROM countries");
+    const meta = await pool.query("SELECT last_refreshed_at FROM meta LIMIT 1");
+    const lastRef = meta.rows[0]?.last_refreshed_at || new Date();
+
+    const canvas = createCanvas(900, 600);
+    const ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = "#1e1e1e";
+    ctx.fillRect(0, 0, 900, 600);
+
+    ctx.fillStyle = "white";
+    ctx.font = "26px Arial";
+    ctx.fillText(`Total Countries: ${total.rows[0].count}`, 50, 80);
+    ctx.fillText(`Last Refreshed: ${lastRef.toISOString()}`, 50, 120);
+
+    ctx.fillText("Top 5 Countries by GDP:", 50, 180);
+    ctx.font = "20px Arial";
+
+    let y = 230;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "N/A";
+      ctx.fillText(`${i + 1}. ${r.name || "Unknown"} - ${gdp}`, 50, y);
+      y += 60;
+    }
+
+    res.setHeader("Content-Type", "image/png");
+    canvas.createPNGStream().pipe(res);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // =============== SERVER START ===============
