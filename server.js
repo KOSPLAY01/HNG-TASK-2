@@ -2,9 +2,7 @@ import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
 import pkg from "pg";
-import { createCanvas, loadImage } from "canvas";
-import fs from "fs";
-import path from "path";
+import { createCanvas } from "canvas";
 
 dotenv.config();
 const { Pool } = pkg;
@@ -39,10 +37,6 @@ const initDB = async () => {
       last_refreshed_at TIMESTAMP DEFAULT NOW()
     );
   `);
-
-  // Ensure cache folder exists
-  const cacheDir = path.join(process.cwd(), "cache");
-  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 };
 await initDB();
 
@@ -147,8 +141,6 @@ async function refreshCountries(req, res) {
       client.release();
     }
 
-    await generateSummaryImage();
-
     console.log("✅ Refresh complete!");
     res.json({
       message: "Countries refreshed successfully",
@@ -160,11 +152,10 @@ async function refreshCountries(req, res) {
   }
 }
 
-// =============== REFRESH ROUTE ===============
+// =============== ROUTES ===============
 app.post("/countries/refresh", refreshCountries);
-app.get("/countries/refresh", refreshCountries); // optional testing
 
-// =============== GET ALL COUNTRIES ===============
+// Get all countries with optional filters
 app.get("/countries", async (req, res) => {
   try {
     const { region, currency, sort } = req.query;
@@ -192,7 +183,7 @@ app.get("/countries", async (req, res) => {
   }
 });
 
-// =============== GET ONE COUNTRY ===============
+// Get single country
 app.get("/countries/:name", async (req, res) => {
   try {
     const { name } = req.params;
@@ -200,32 +191,29 @@ app.get("/countries/:name", async (req, res) => {
       "SELECT * FROM countries WHERE LOWER(name) = LOWER($1)",
       [name]
     );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Country not found" });
-    }
+    if (rows.length === 0) return res.status(404).json({ error: "Country not found" });
     res.json(rows[0]);
   } catch {
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// =============== DELETE COUNTRY ===============
+// Delete country
 app.delete("/countries/:name", async (req, res) => {
   try {
     const { name } = req.params;
     const { rowCount } = await pool.query(
-      "DELETE FROM countries WHERE LOWER(name)=LOWER($1)",
+      "DELETE FROM countries WHERE LOWER(name) = LOWER($1)",
       [name]
     );
-    if (!rowCount)
-      return res.status(404).json({ error: "Country not found" });
+    if (!rowCount) return res.status(404).json({ error: "Country not found" });
     res.json({ message: `${name} deleted successfully` });
   } catch {
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// =============== STATUS ===============
+// Status endpoint
 app.get("/status", async (req, res) => {
   try {
     const total = await pool.query("SELECT COUNT(*) FROM countries");
@@ -239,17 +227,8 @@ app.get("/status", async (req, res) => {
   }
 });
 
-// =============== IMAGE SERVE ===============
+// Generate and serve image in memory
 app.get("/countries/image", async (req, res) => {
-  const filePath = path.join(process.cwd(), "cache", "summary.png");
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "Summary image not found" });
-  }
-  res.sendFile(filePath);
-});
-
-// =============== IMAGE GENERATION ===============
-async function generateSummaryImage() {
   const { rows } = await pool.query(
     "SELECT * FROM countries ORDER BY estimated_gdp DESC LIMIT 5"
   );
@@ -260,24 +239,20 @@ async function generateSummaryImage() {
   const canvas = createCanvas(900, 600);
   const ctx = canvas.getContext("2d");
 
-  // Background
   ctx.fillStyle = "#1e1e1e";
   ctx.fillRect(0, 0, 900, 600);
 
-  // Header
   ctx.fillStyle = "white";
   ctx.font = "26px Arial";
   ctx.fillText(`Total Countries: ${total.rows[0].count}`, 50, 80);
   ctx.fillText(`Last Refreshed: ${lastRef.toISOString()}`, 50, 120);
 
-  // Title
   ctx.fillText("Top 5 Countries by GDP:", 50, 180);
   ctx.font = "20px Arial";
 
   let y = 230;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    ctx.fillStyle = "white";
     ctx.fillText(
       `${i + 1}. ${r.name} - ${Math.round(r.estimated_gdp).toLocaleString()}`,
       50,
@@ -286,16 +261,9 @@ async function generateSummaryImage() {
     y += 60;
   }
 
-  // Save image and await finish
-  const cacheDir = path.join(process.cwd(), "cache");
-  await new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(path.join(cacheDir, "summary.png"));
-    const stream = canvas.createPNGStream();
-    stream.pipe(out);
-    out.on("finish", resolve);
-    out.on("error", reject);
-  });
-}
+  res.setHeader("Content-Type", "image/png");
+  canvas.createPNGStream().pipe(res);
+});
 
 // =============== SERVER START ===============
 const PORT = process.env.PORT || 3000;
