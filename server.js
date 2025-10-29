@@ -45,7 +45,7 @@ const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000;
 const getTimestamp = () => new Date().toISOString();
 
 // ================= REFRESH FUNCTION =================
-async function refreshCountries(req, res) {
+async function refreshCountries() {
   try {
     console.log("🌍 Refreshing countries and exchange rates...");
 
@@ -56,17 +56,9 @@ async function refreshCountries(req, res) {
       axios.get("https://open.er-api.com/v6/latest/USD"),
     ]);
 
-    if (countriesRes.status !== "fulfilled") {
-      return res.status(503).json({
-        error: "External data source unavailable",
-        details: "Could not fetch data from Countries API",
-      });
-    }
-    if (ratesRes.status !== "fulfilled") {
-      return res.status(503).json({
-        error: "External data source unavailable",
-        details: "Could not fetch data from Exchange Rates API",
-      });
+    if (countriesRes.status !== "fulfilled" || ratesRes.status !== "fulfilled") {
+      console.error("⚠️ External API unavailable, skipping refresh");
+      return;
     }
 
     const countries = countriesRes.value.data;
@@ -108,8 +100,7 @@ async function refreshCountries(req, res) {
              exchange_rate = EXCLUDED.exchange_rate,
              estimated_gdp = EXCLUDED.estimated_gdp,
              flag_url = EXCLUDED.flag_url,
-             last_refreshed_at = NOW();
-          `,
+             last_refreshed_at = NOW();`,
           [
             name,
             capital,
@@ -131,30 +122,31 @@ async function refreshCountries(req, res) {
       `);
 
       await client.query("COMMIT");
+      console.log("✅ Refresh complete!");
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
     } finally {
       client.release();
     }
-
-    console.log("✅ Refresh complete!");
-    res.json({
-      message: "Countries refreshed successfully",
-      timestamp: getTimestamp(),
-    });
   } catch (error) {
-    console.error("❌ Error refreshing countries:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("❌ Error refreshing countries:", error.message);
   }
 }
 
 // ================= ROUTES =================
-// Refresh
-app.post("/countries/refresh", refreshCountries);
-app.get("/countries/refresh", refreshCountries);
 
-// Get all countries with optional filters
+// Manual refresh
+app.post("/countries/refresh", async (req, res) => {
+  await refreshCountries();
+  res.json({ message: "Countries refreshed successfully", timestamp: getTimestamp() });
+});
+app.get("/countries/refresh", async (req, res) => {
+  await refreshCountries();
+  res.json({ message: "Countries refreshed successfully", timestamp: getTimestamp() });
+});
+
+// Get all countries
 app.get("/countries", async (req, res) => {
   try {
     const { region, currency, sort } = req.query;
@@ -226,21 +218,24 @@ app.get("/status", async (req, res) => {
   }
 });
 
-// Generate and serve summary image IN MEMORY
+// Image endpoint — always works
 app.get("/countries/image", async (req, res) => {
   try {
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       "SELECT * FROM countries ORDER BY estimated_gdp DESC NULLS LAST LIMIT 5"
     );
 
+    // If DB is empty, refresh it automatically
     if (!rows || rows.length === 0) {
-      return res.status(404).json({ error: "Summary image not found" });
+      console.log("⚙️ No data found, refreshing...");
+      await refreshCountries();
+      const refreshed = await pool.query(
+        "SELECT * FROM countries ORDER BY estimated_gdp DESC NULLS LAST LIMIT 5"
+      );
+      rows = refreshed.rows;
     }
 
-    const total = await pool.query("SELECT COUNT(*) FROM countries");
-    const meta = await pool.query("SELECT last_refreshed_at FROM meta LIMIT 1");
-    const lastRef = meta.rows[0]?.last_refreshed_at || new Date();
-
+    // If still empty, create fallback image
     const canvas = createCanvas(900, 600);
     const ctx = canvas.getContext("2d");
 
@@ -249,24 +244,35 @@ app.get("/countries/image", async (req, res) => {
 
     ctx.fillStyle = "white";
     ctx.font = "26px Arial";
-    ctx.fillText(`Total Countries: ${total.rows[0].count}`, 50, 80);
-    ctx.fillText(`Last Refreshed: ${lastRef.toISOString()}`, 50, 120);
 
-    ctx.fillText("Top 5 Countries by GDP:", 50, 180);
-    ctx.font = "20px Arial";
+    if (!rows || rows.length === 0) {
+      ctx.fillText("⚠️ No country data available.", 50, 100);
+      ctx.fillText("Please try again later.", 50, 150);
+    } else {
+      const total = await pool.query("SELECT COUNT(*) FROM countries");
+      const meta = await pool.query("SELECT last_refreshed_at FROM meta LIMIT 1");
+      const lastRef = meta.rows[0]?.last_refreshed_at || new Date();
 
-    let y = 230;
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const gdp = r.estimated_gdp ? Math.round(r.estimated_gdp).toLocaleString() : "N/A";
-      ctx.fillText(`${i + 1}. ${r.name || "Unknown"} - ${gdp}`, 50, y);
-      y += 60;
+      ctx.fillText(`Total Countries: ${total.rows[0].count}`, 50, 80);
+      ctx.fillText(`Last Refreshed: ${lastRef.toISOString()}`, 50, 120);
+      ctx.fillText("Top 5 Countries by GDP:", 50, 180);
+
+      ctx.font = "20px Arial";
+      let y = 230;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const gdp = r.estimated_gdp
+          ? Math.round(r.estimated_gdp).toLocaleString()
+          : "N/A";
+        ctx.fillText(`${i + 1}. ${r.name || "Unknown"} - ${gdp}`, 50, y);
+        y += 60;
+      }
     }
 
     res.setHeader("Content-Type", "image/png");
     canvas.createPNGStream().pipe(res);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Image generation failed:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
 });
