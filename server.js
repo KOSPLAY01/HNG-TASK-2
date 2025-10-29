@@ -46,71 +46,109 @@ initDB();
 const randomMultiplier = () => Math.floor(Math.random() * 1001) + 1000;
 const getTimestamp = () => new Date().toISOString();
 
-// =============== REFRESH ROUTE ===============
-app.post("/countries/refresh", async (req, res) => {
+// =============== REFRESH FUNCTION ===============
+async function refreshCountries(req, res) {
   try {
     console.log("🌍 Refreshing countries and exchange rates...");
 
+    // Fetch external APIs
     const [countriesRes, ratesRes] = await Promise.allSettled([
-      axios.get("https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies"),
+      axios.get(
+        "https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies"
+      ),
       axios.get("https://open.er-api.com/v6/latest/USD"),
     ]);
 
-    if (countriesRes.status !== "fulfilled" || ratesRes.status !== "fulfilled") {
+    if (countriesRes.status !== "fulfilled") {
       return res.status(503).json({
         error: "External data source unavailable",
-        details: "Could not fetch data from one or more APIs",
+        details: "Could not fetch data from Countries API",
+      });
+    }
+    if (ratesRes.status !== "fulfilled") {
+      return res.status(503).json({
+        error: "External data source unavailable",
+        details: "Could not fetch data from Exchange Rates API",
       });
     }
 
     const countries = countriesRes.value.data;
     const rates = ratesRes.value.data.rates || {};
 
-    for (const c of countries) {
-      const name = c.name;
-      const capital = c.capital || null;
-      const region = c.region || null;
-      const population = c.population || 0;
-      const flag_url = c.flag || null;
-      const currency = c.currencies?.[0]?.code || null;
+    // Start DB transaction
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-      const exchange_rate = currency && rates[currency] ? rates[currency] : null;
-      let estimated_gdp = 0;
+      for (const c of countries) {
+        const name = c.name;
+        const capital = c.capital || null;
+        const region = c.region || null;
+        const population = c.population || 0;
+        const flag_url = c.flag || null;
 
-      if (exchange_rate) {
-        const multiplier = randomMultiplier();
-        estimated_gdp = (population * multiplier) / exchange_rate;
+        const currency_code = c.currencies?.[0]?.code || null;
+        let exchange_rate = null;
+        let estimated_gdp = null;
+
+        if (currency_code) {
+          exchange_rate = rates[currency_code] || null;
+          estimated_gdp =
+            exchange_rate !== null
+              ? (population * randomMultiplier()) / exchange_rate
+              : 0;
+        } else {
+          estimated_gdp = 0;
+        }
+
+        await client.query(
+          `INSERT INTO countries
+           (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+           ON CONFLICT (name)
+           DO UPDATE SET
+             capital = EXCLUDED.capital,
+             region = EXCLUDED.region,
+             population = EXCLUDED.population,
+             currency_code = EXCLUDED.currency_code,
+             exchange_rate = EXCLUDED.exchange_rate,
+             estimated_gdp = EXCLUDED.estimated_gdp,
+             flag_url = EXCLUDED.flag_url,
+             last_refreshed_at = NOW();
+          `,
+          [
+            name,
+            capital,
+            region,
+            population,
+            currency_code,
+            exchange_rate,
+            estimated_gdp,
+            flag_url,
+          ]
+        );
       }
 
-      await pool.query(
-        `INSERT INTO countries 
-         (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
-         ON CONFLICT (name)
-         DO UPDATE SET
-           capital = EXCLUDED.capital,
-           region = EXCLUDED.region,
-           population = EXCLUDED.population,
-           currency_code = EXCLUDED.currency_code,
-           exchange_rate = EXCLUDED.exchange_rate,
-           estimated_gdp = EXCLUDED.estimated_gdp,
-           flag_url = EXCLUDED.flag_url,
-           last_refreshed_at = NOW();
-        `,
-        [name, capital, region, population, currency, exchange_rate, estimated_gdp, flag_url]
-      );
+      // Update meta table
+      await client.query(`
+        INSERT INTO meta (id, last_refreshed_at)
+        VALUES (1, NOW())
+        ON CONFLICT (id)
+        DO UPDATE SET last_refreshed_at = NOW();
+      `);
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
 
-    await pool.query(`
-      INSERT INTO meta (id, last_refreshed_at)
-      VALUES (1, NOW())
-      ON CONFLICT (id)
-      DO UPDATE SET last_refreshed_at = NOW();
-    `);
-
+    // Generate image after DB commit
     await generateSummaryImage();
-    console.log("✅ Refresh complete!");
 
+    console.log("✅ Refresh complete!");
     res.json({
       message: "Countries refreshed successfully",
       timestamp: getTimestamp(),
@@ -119,7 +157,13 @@ app.post("/countries/refresh", async (req, res) => {
     console.error("❌ Error refreshing countries:", error);
     res.status(500).json({ error: "Internal server error" });
   }
-});
+}
+
+// =============== REFRESH ROUTE ===============
+app.post("/countries/refresh", refreshCountries);
+
+// Optional GET alias for testing
+app.get("/countries/refresh", refreshCountries);
 
 // =============== GET ALL COUNTRIES ===============
 app.get("/countries", async (req, res) => {
@@ -147,15 +191,6 @@ app.get("/countries", async (req, res) => {
     console.error(error);
     res.status(500).json({ error: "Internal server error" });
   }
-});
-
-// =============== IMAGE SERVE ===============
-app.get("/countries/image", async (req, res) => {
-  const filePath = path.join(process.cwd(), "cache", "summary.png");
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "Summary image not found" });
-  }
-  res.sendFile(filePath);
 });
 
 // =============== GET ONE COUNTRY ===============
@@ -205,6 +240,15 @@ app.get("/status", async (req, res) => {
   }
 });
 
+// =============== IMAGE SERVE ===============
+app.get("/countries/image", async (req, res) => {
+  const filePath = path.join(process.cwd(), "cache", "summary.png");
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Summary image not found" });
+  }
+  res.sendFile(filePath);
+});
+
 // =============== IMAGE GENERATION ===============
 async function generateSummaryImage() {
   const { rows } = await pool.query(
@@ -236,26 +280,21 @@ async function generateSummaryImage() {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     try {
-      // ✅ Fetch and load flag image safely
-      const flagRes = await axios.get(r.flag_url, { responseType: "arraybuffer" });
-      const flag = await loadImage(Buffer.from(flagRes.data));
-
-      const flagWidth = 60;
-      const flagHeight = 40;
-      const flagX = 60;
-      const flagY = y - 30;
-
-      // Draw flag
-      ctx.drawImage(flag, flagX, flagY, flagWidth, flagHeight);
-
-      // Draw text beside flag
+      if (r.flag_url) {
+        const flagRes = await axios.get(r.flag_url, { responseType: "arraybuffer" });
+        const flag = await loadImage(Buffer.from(flagRes.data));
+        const flagWidth = 60;
+        const flagHeight = 40;
+        const flagX = 60;
+        const flagY = y - 30;
+        ctx.drawImage(flag, flagX, flagY, flagWidth, flagHeight);
+      }
       ctx.fillStyle = "white";
       ctx.fillText(
         `${i + 1}. ${r.name} - ${Math.round(r.estimated_gdp).toLocaleString()}`,
-        flagX + flagWidth + 20,
+        140,
         y
       );
-
       y += 60;
     } catch (err) {
       console.warn(`⚠️ Could not load flag for ${r.name}:`, err.message);
